@@ -45,28 +45,34 @@ export default function KeyboardScroll() {
         };
     }, []);
 
-    const loadRemainingFrames = () => {
-        let loadedCount = 0;
+    const loadRemainingFrames = async () => {
+        // Load in batches to avoid freezing the browser or choking network
+        const BATCH_SIZE = 5;
 
-        for (let i = 1; i < FRAME_COUNT; i++) {
-            const img = new Image();
-            img.src = `${IMAGE_PATH_PREFIX}${i}${IMAGE_EXTENSION}`;
+        for (let i = 1; i < FRAME_COUNT; i += BATCH_SIZE) {
+            const promises = [];
+            // Create a batch of promises
+            for (let j = 0; j < BATCH_SIZE && (i + j) < FRAME_COUNT; j++) {
+                const index = i + j;
+                promises.push(new Promise<void>((resolve) => {
+                    const img = new Image();
+                    img.src = `${IMAGE_PATH_PREFIX}${index}${IMAGE_EXTENSION}`;
+                    img.onload = () => {
+                        framesRef.current[index] = img;
+                        // If this happens to be the current frame needed, render it
+                        if (Math.round(frameIndex.get()) === index) {
+                            renderFrame(index);
+                        }
+                        resolve();
+                    };
+                    img.onerror = () => resolve(); // Proceed even on error
+                }));
+            }
 
-            img.onload = () => {
-                framesRef.current[i] = img;
-                loadedCount++;
-
-                // If the user has scrolled to this frame already, render it now
-                const currentScrollIndex = Math.round(frameIndex.get());
-                if (currentScrollIndex === i) {
-                    renderFrame(i);
-                }
-            };
-
-            img.onerror = () => {
-                // Handle error (optional: maybe retry or skip)
-                console.warn(`Failed to load frame ${i}`);
-            };
+            // Wait for this batch to finish (or mostly finish) before starting next
+            // Adding a small delay to yield to main thread
+            await Promise.all(promises);
+            await new Promise(r => setTimeout(r, 20));
         }
     };
 
