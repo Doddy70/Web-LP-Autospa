@@ -6,7 +6,7 @@ import Preloader from "./Preloader";
 
 const FRAME_COUNT = 240;
 const IMAGE_PATH_PREFIX = "/images/sequence2/frame_";
-const IMAGE_EXTENSION = ".png";
+const IMAGE_EXTENSION = ".webp";
 
 export default function KeyboardScroll() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
