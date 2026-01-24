@@ -11,7 +11,9 @@ const IMAGE_EXTENSION = ".png";
 export default function KeyboardScroll() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [images, setImages] = useState<HTMLImageElement[]>([]);
+    // Use Ref for images to avoid re-renders on every load
+    const framesRef = useRef<(HTMLImageElement | null)[]>(new Array(FRAME_COUNT).fill(null));
+
     const [loading, setLoading] = useState(true);
     const [preloaderFinished, setPreloaderFinished] = useState(false);
 
@@ -24,77 +26,87 @@ export default function KeyboardScroll() {
     // Map scroll to frame index
     const frameIndex = useTransform(scrollYProgress, [0, 1], [0, FRAME_COUNT - 1]);
 
-    // 1. Load First Frame Immediately (Critical Path)
+    // 1. Load First Frame Immediately & Dismiss Preloader
     useEffect(() => {
         const img = new Image();
         img.src = `${IMAGE_PATH_PREFIX}0${IMAGE_EXTENSION}`;
         img.onload = () => {
-            // Render it immediately to canvas
-            const canvas = canvasRef.current;
-            if (canvas) {
-                const ctx = canvas.getContext("2d");
-                if (ctx) {
-                    // Set canvas size
-                    const dpr = window.devicePixelRatio || 1;
-                    canvas.width = window.innerWidth * dpr;
-                    canvas.height = window.innerHeight * dpr;
-                    ctx.scale(dpr, dpr);
+            // Store frame 0
+            framesRef.current[0] = img;
 
-                    // Draw
-                    const scale = Math.min(canvas.width / dpr / img.width, canvas.height / dpr / img.height);
-                    const x = (canvas.width / dpr - img.width * scale) / 2;
-                    const y = (canvas.height / dpr - img.height * scale) / 2;
-                    ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
-                }
-            }
-            // Start loading the rest
-            loadAllFrames(img);
+            // Render it immediately
+            renderFrame(0);
+
+            // Dismiss Preloader immediately
+            setLoading(false);
+
+            // Start loading the rest in background
+            loadRemainingFrames();
         };
     }, []);
 
-    const loadAllFrames = async (firstImage: HTMLImageElement) => {
-        const promises = [Promise.resolve(firstImage)]; // Index 0 is already loaded
+    const loadRemainingFrames = () => {
+        let loadedCount = 0;
 
         for (let i = 1; i < FRAME_COUNT; i++) {
-            promises.push(
-                new Promise<HTMLImageElement>((resolve) => {
-                    const img = new Image();
-                    img.src = `${IMAGE_PATH_PREFIX}${i}${IMAGE_EXTENSION}`;
-                    img.onload = () => resolve(img);
-                    img.onerror = () => resolve(img); // Continue even if error
-                })
-            );
-        }
+            const img = new Image();
+            img.src = `${IMAGE_PATH_PREFIX}${i}${IMAGE_EXTENSION}`;
 
-        const allImages = await Promise.all(promises);
-        setImages(allImages);
-        setLoading(false);
+            img.onload = () => {
+                framesRef.current[i] = img;
+                loadedCount++;
+
+                // If the user has scrolled to this frame already, render it now
+                const currentScrollIndex = Math.round(frameIndex.get());
+                if (currentScrollIndex === i) {
+                    renderFrame(i);
+                }
+            };
+
+            img.onerror = () => {
+                // Handle error (optional: maybe retry or skip)
+                console.warn(`Failed to load frame ${i}`);
+            };
+        }
     };
 
     // Draw frame on canvas (Responsive)
     const renderFrame = (index: number) => {
         const canvas = canvasRef.current;
-        if (!canvas || images.length === 0) return;
+        if (!canvas) return;
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
         const i = Math.min(FRAME_COUNT - 1, Math.max(0, Math.round(index)));
-        const img = images[i];
+        const img = framesRef.current[i];
 
-        if (!img) return;
+        // If frame isn't loaded yet, try to find the nearest loaded frame (fallback)
+        // This prevents flickering if the user scrolls faster than download
+        let drawImg = img;
+        if (!drawImg) {
+            // Search backwards for nearest loaded frame
+            for (let j = i - 1; j >= 0; j--) {
+                if (framesRef.current[j]) {
+                    drawImg = framesRef.current[j];
+                    break;
+                }
+            }
+        }
+
+        if (!drawImg) return;
 
         const canvasWidth = canvas.width / (window.devicePixelRatio || 1);
         const canvasHeight = canvas.height / (window.devicePixelRatio || 1);
 
-        const scale = Math.min(canvasWidth / img.width, canvasHeight / img.height);
-        const x = (canvasWidth - img.width * scale) / 2;
-        const y = (canvasHeight - img.height * scale) / 2;
+        const scale = Math.min(canvasWidth / drawImg.width, canvasHeight / drawImg.height);
+        const x = (canvasWidth - drawImg.width * scale) / 2;
+        const y = (canvasHeight - drawImg.height * scale) / 2;
 
         ctx.clearRect(0, 0, canvasWidth, canvasHeight);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+        ctx.drawImage(drawImg, x, y, drawImg.width * scale, drawImg.height * scale);
     };
 
     // Handle Resize
@@ -109,21 +121,20 @@ export default function KeyboardScroll() {
                 const ctx = canvas.getContext('2d');
                 if (ctx) ctx.scale(dpr, dpr);
 
-                // Re-render current frame if possible
-                if (!loading && images.length > 0) {
-                    renderFrame(frameIndex.get());
-                }
+                renderFrame(frameIndex.get());
             }
         };
         window.addEventListener("resize", handleResize);
+
+        // Initial setup
+        handleResize();
+
         return () => window.removeEventListener("resize", handleResize);
-    }, [loading, images]);
+    }, []);
 
     // Update on scroll
     useMotionValueEvent(frameIndex, "change", (latest) => {
-        if (!loading && images.length > 0) {
-            requestAnimationFrame(() => renderFrame(latest));
-        }
+        requestAnimationFrame(() => renderFrame(latest));
     });
 
     // Text Overlay Transforms
