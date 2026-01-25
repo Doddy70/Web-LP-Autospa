@@ -4,6 +4,8 @@ import React, { useRef, useEffect, useState } from "react";
 import { useScroll, useMotionValueEvent, useTransform, motion } from "framer-motion";
 import Preloader from "./Preloader";
 
+import { globalFramesIds } from "@/lib/GlobalImageCache";
+
 const FRAME_COUNT = 240;
 const IMAGE_PATH_PREFIX = "/images/sequence2/frame_";
 const IMAGE_EXTENSION = ".webp";
@@ -11,11 +13,17 @@ const IMAGE_EXTENSION = ".webp";
 export default function KeyboardScroll() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    // Use Ref for images to avoid re-renders on every load
-    const framesRef = useRef<(HTMLImageElement | null)[]>(new Array(FRAME_COUNT).fill(null));
 
-    const [loading, setLoading] = useState(true);
-    const [preloaderFinished, setPreloaderFinished] = useState(false);
+    // Check if we already have frames in the global cache
+    const hasCachedFrames = globalFramesIds.some(img => img !== null);
+
+    // If cached, we don't need to load or show preloader
+    const [loading, setLoading] = useState(!hasCachedFrames);
+    const [preloaderFinished, setPreloaderFinished] = useState(hasCachedFrames);
+
+    // We can use a ref to access the data without triggering re-renders, 
+    // but we'll read from the global array directly in renderFrame for simplicity 
+    // or sync them here. To keep it clean, let's just reference the global array.
 
     // Scroll progress
     const { scrollYProgress } = useScroll({
@@ -26,13 +34,20 @@ export default function KeyboardScroll() {
     // Map scroll to frame index
     const frameIndex = useTransform(scrollYProgress, [0, 1], [0, FRAME_COUNT - 1]);
 
-    // 1. Load First Frame Immediately & Dismiss Preloader
+    // 1. Initialize
     useEffect(() => {
+        // If we already have cached frames, just render the first one and ensure loading is off
+        if (hasCachedFrames) {
+            renderFrame(0);
+            return;
+        }
+
+        // Otherwise, start loading process
         const img = new Image();
         img.src = `${IMAGE_PATH_PREFIX}0${IMAGE_EXTENSION}`;
         img.onload = () => {
-            // Store frame 0
-            framesRef.current[0] = img;
+            // Store frame 0 globally
+            globalFramesIds[0] = img;
 
             // Render it immediately
             renderFrame(0);
@@ -50,15 +65,20 @@ export default function KeyboardScroll() {
         const BATCH_SIZE = 5;
 
         for (let i = 1; i < FRAME_COUNT; i += BATCH_SIZE) {
+            // Stop loading if we unmount? 
+            // Actually continue loading is fine so cache gets populated for next time.
+
             const promises = [];
             // Create a batch of promises
             for (let j = 0; j < BATCH_SIZE && (i + j) < FRAME_COUNT; j++) {
                 const index = i + j;
+                if (globalFramesIds[index]) continue; // Skip if already loaded
+
                 promises.push(new Promise<void>((resolve) => {
                     const img = new Image();
                     img.src = `${IMAGE_PATH_PREFIX}${index}${IMAGE_EXTENSION}`;
                     img.onload = () => {
-                        framesRef.current[index] = img;
+                        globalFramesIds[index] = img;
                         // If this happens to be the current frame needed, render it
                         if (Math.round(frameIndex.get()) === index) {
                             renderFrame(index);
@@ -85,7 +105,7 @@ export default function KeyboardScroll() {
         if (!ctx) return;
 
         const i = Math.min(FRAME_COUNT - 1, Math.max(0, Math.round(index)));
-        const img = framesRef.current[i];
+        const img = globalFramesIds[i];
 
         // If frame isn't loaded yet, try to find the nearest loaded frame (fallback)
         // This prevents flickering if the user scrolls faster than download
@@ -93,8 +113,8 @@ export default function KeyboardScroll() {
         if (!drawImg) {
             // Search backwards for nearest loaded frame
             for (let j = i - 1; j >= 0; j--) {
-                if (framesRef.current[j]) {
-                    drawImg = framesRef.current[j];
+                if (globalFramesIds[j]) {
+                    drawImg = globalFramesIds[j];
                     break;
                 }
             }
@@ -105,7 +125,18 @@ export default function KeyboardScroll() {
         const canvasWidth = canvas.width / (window.devicePixelRatio || 1);
         const canvasHeight = canvas.height / (window.devicePixelRatio || 1);
 
-        const scale = Math.min(canvasWidth / drawImg.width, canvasHeight / drawImg.height);
+        // Determine if we should use cover or contain
+        // On portrait (mobile) screens, we use 'cover' to fill height and avoid black bars.
+        // On landscape (desktop) screens, we use 'contain' to ensure the full car is visible.
+        const isPortrait = canvasHeight > canvasWidth;
+
+        let scale;
+        if (isPortrait) {
+            scale = Math.max(canvasWidth / drawImg.width, canvasHeight / drawImg.height);
+        } else {
+            scale = Math.min(canvasWidth / drawImg.width, canvasHeight / drawImg.height);
+        }
+
         const x = (canvasWidth - drawImg.width * scale) / 2;
         const y = (canvasHeight - drawImg.height * scale) / 2;
 
@@ -171,9 +202,9 @@ export default function KeyboardScroll() {
                     style={{ opacity: opacity1, y: y1 }}
                     className="absolute inset-0 flex items-center justify-center pointer-events-none"
                 >
-                    <div className="text-center bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-10 md:p-14 max-w-3xl mx-4 bg-gradient-to-b from-white/10 to-transparent">
-                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white mb-6 drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">We care about your car</h2>
-                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">From the inside out.</p>
+                    <div className="text-center bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-6 md:p-10 max-w-3xl mx-4 bg-gradient-to-b from-white/10 to-transparent">
+                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">Autospa</h2>
+                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">Passion For Detail.</p>
                     </div>
                 </motion.div>
 
@@ -182,9 +213,9 @@ export default function KeyboardScroll() {
                     style={{ opacity: opacity2, y: y2 }}
                     className="absolute inset-0 flex items-center justify-start px-8 md:px-20 pointer-events-none"
                 >
-                    <div className="text-left bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-10 md:p-14 max-w-2xl bg-gradient-to-br from-white/10 to-transparent">
-                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white mb-6 drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] leading-tight">Because every layer is important</h2>
-                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">High precision detailing.</p>
+                    <div className="text-left bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-6 md:p-10 max-w-2xl bg-gradient-to-br from-white/10 to-transparent">
+                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] leading-tight">Detailing at its finest</h2>
+                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">Meticulous Care.</p>
                     </div>
                 </motion.div>
 
@@ -193,9 +224,9 @@ export default function KeyboardScroll() {
                     style={{ opacity: opacity3, y: y3 }}
                     className="absolute inset-0 flex items-center justify-end px-8 md:px-20 pointer-events-none"
                 >
-                    <div className="text-right bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-10 md:p-14 max-w-2xl bg-gradient-to-bl from-white/10 to-transparent">
-                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white mb-6 drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">Premium car treatment</h2>
-                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">Best technology for your vehicle.</p>
+                    <div className="text-right bg-black/30 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] rounded-3xl p-6 md:p-10 max-w-2xl bg-gradient-to-bl from-white/10 to-transparent">
+                        <h2 className="text-5xl md:text-7xl font-bold tracking-tight text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">Engineered Protection</h2>
+                        <p className="text-xl text-gray-200 font-medium drop-shadow-md">TACSYSTEM® Technology.</p>
                     </div>
                 </motion.div>
 
